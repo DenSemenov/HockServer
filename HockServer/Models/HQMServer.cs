@@ -1320,6 +1320,8 @@ public class HQMServer
             );
             var update = newPlayer.GetUpdateMessage(playerIndex.Value);
 
+            Console.WriteLine("new player", newPlayer);
+
             Players.Players[playerIndex.Value.Index] = newPlayer;
 
             Messages.AddGlobalMessage(update, true, true);
