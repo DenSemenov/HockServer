@@ -1626,7 +1626,6 @@ public class HQMServer
 
         if (!string.IsNullOrEmpty(publicAddress))
         {
-            var publicSocket = new UdpClient();
             var publicClient = new HttpClient();
             var publicAddr = publicAddress;
 
@@ -1640,7 +1639,7 @@ public class HQMServer
                         for (int i = 0; i < 60; i++)
                         {
                             var msg = Encoding.ASCII.GetBytes("Hock\x20");
-                            await publicSocket.SendAsync(msg, msg.Length, masterServer);
+                            await socket.SendAsync(msg, msg.Length, masterServer);
                             Console.WriteLine("Sent master query");
                             await Task.Delay(TimeSpan.FromSeconds(10));
                         }
