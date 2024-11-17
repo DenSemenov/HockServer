@@ -521,6 +521,9 @@ public struct ReplayTick
 
 public class HQMServer
 {
+    private static System.Threading.Timer _timer;
+    private static List<byte> _buf = new List<byte>(new byte[4096]);
+
     public static readonly byte[] GAME_HEADER = new byte[] { 0x48, 0x6F, 0x63, 0x6B };
     public HQMServerPlayerList Players { get; set; }
     public HQMServerMessages Messages { get; set; }
@@ -1609,12 +1612,17 @@ public class HQMServer
             var addr = new IPEndPoint(IPAddress.Any, port);
             var socket = new UdpClient(addr);
 
-            //void Tick(object state)
-            //{
-            //    _ = server.Tick(socket, new List<byte>(new byte[4096]));
-            //}
-
-            //var tickTimer = new Timer(Tick, null, 0, 10);
+            _timer = new System.Threading.Timer(async _ =>
+            {
+                try
+                {
+                    await server.Tick(socket, _buf);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Timer callback error: {ex.Message}\n{ex.StackTrace}");
+                }
+            }, null, 0, 10);
 
             Console.WriteLine($"Server listening at address {socket.Client.LocalEndPoint}");
 
@@ -1659,19 +1667,6 @@ public class HQMServer
                     }
                 });
             }
-
-            var buf = new List<byte>(new byte[4096]);
-            var timer = new Timer(async _ =>
-            {
-                try
-                {
-                    await server.Tick(socket, buf);
-                }
-                catch(Exception ex)
-                {
-                    Console.WriteLine(ex.Message + ex.StackTrace);
-                }
-            }, null, 0, 10);
 
             var packetStream = Task.Run(async () =>
             {
