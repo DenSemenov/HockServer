@@ -1631,34 +1631,34 @@ public class HQMServer
                 return new IPEndPoint(ip, port);
             }
 
-            if (!string.IsNullOrEmpty(publicAddress))
-            {
-                var publicClient = new HttpClient();
-                var publicAddr = publicAddress;
+            //if (!string.IsNullOrEmpty(publicAddress))
+            //{
+            //    var publicClient = new HttpClient();
+            //    var publicAddr = publicAddress;
 
-                _ = Task.Run(async () =>
-                {
-                    while (true)
-                    {
-                        try
-                        {
-                            var masterServer = await GetHttpResponse(publicClient, publicAddr);
-                            for (int i = 0; i < 60; i++)
-                            {
-                                var msg = Encoding.ASCII.GetBytes("Hock\x20");
-                                await socket.SendAsync(msg, msg.Length, masterServer);
-                                Console.WriteLine("Sent master query");
-                                await Task.Delay(TimeSpan.FromSeconds(10));
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine($"Error: {e.Message}");
-                            await Task.Delay(TimeSpan.FromSeconds(15));
-                        }
-                    }
-                });
-            }
+            //    _ = Task.Run(async () =>
+            //    {
+            //        while (true)
+            //        {
+            //            try
+            //            {
+            //                var masterServer = await GetHttpResponse(publicClient, publicAddr);
+            //                for (int i = 0; i < 60; i++)
+            //                {
+            //                    var msg = Encoding.ASCII.GetBytes("Hock\x20");
+            //                    await socket.SendAsync(msg, msg.Length, masterServer);
+            //                    Console.WriteLine("Sent master query");
+            //                    await Task.Delay(TimeSpan.FromSeconds(10));
+            //                }
+            //            }
+            //            catch (Exception e)
+            //            {
+            //                Console.WriteLine($"Error: {e.Message}");
+            //                await Task.Delay(TimeSpan.FromSeconds(15));
+            //            }
+            //        }
+            //    });
+            //}
 
             var packetStream = Task.Run(async () =>
             {
