@@ -1660,14 +1660,11 @@ public class HQMServer
                 });
             }
 
-            var sendUpdatesStream = Task.Run(async () =>
+            var buf = new List<byte>(new byte[4096]);
+            var timer = new Timer(async _ =>
             {
-                var buf = new List<byte>(new byte[4096]);
-                while (true)
-                {
-                    server.Tick(socket, buf);
-                }
-            });
+                server.Tick(socket, buf);
+            }, null, 0, 10);
 
             var packetStream = Task.Run(async () =>
             {
@@ -1688,7 +1685,7 @@ public class HQMServer
                 }
             });
 
-            await Task.WhenAll(packetStream, sendUpdatesStream);
+            await Task.WhenAll(packetStream);
 
             Console.WriteLine("Stopped");
         }
