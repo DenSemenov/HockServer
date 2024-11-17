@@ -1019,8 +1019,6 @@ public class HQMServer
 
                 byte[] slice = writeBuf.ToArray();
                 await socket.SendAsync(slice, slice.Length, networkPlayer.Addr);
-
-                Console.WriteLine("Sent update to {0}", networkPlayer.Addr);
             }
         }
     }
@@ -1128,7 +1126,6 @@ public class HQMServer
         UdpClient socket,
         List<byte> writeBuf)
     {
-        Console.WriteLine("Tick");
         try
         {
             if (PlayerCount() != 0)
@@ -1570,11 +1567,9 @@ public class HQMServer
         switch (command)
         {
             case JoinMessage joinCommand:
-                Console.WriteLine("Join {0} v {1} pn {2}", addr, joinCommand.Version, joinCommand.PlayerName);
                 PlayerJoin(addr, joinCommand.Version, joinCommand.PlayerName);
                 break;
             case UpdateMessage updateCommand:
-                Console.WriteLine("UpdateCommand {0} curGame {1}", addr, updateCommand.CurrentGameId);
                 PlayerUpdate(
                     addr,
                     updateCommand.CurrentGameId,
@@ -1587,7 +1582,6 @@ public class HQMServer
                     );
                 break;
             case ExitMessage exitCommand:
-                Console.WriteLine("exitCommand {0} ", addr);
                 PlayerExit(addr);
                 break;
             case ServerInfoMessage serverInfoCommand:
