@@ -1345,21 +1345,25 @@ public class HQMServer
         var maxPlayerCount = Config.PlayerMax;
         if (playerCount >= maxPlayerCount)
         {
+            Console.WriteLine("PlayerCount {0}", playerCount);
             return; // Ignore join request
         }
         if (playerVersion != 55)
         {
+            Console.WriteLine("Version {0}", playerVersion);
             return; // Not the right version
         }
         var currentSlot = FindPlayerSlot(addr);
         if (currentSlot.HasValue)
         {
+            Console.WriteLine("Slot");
             return; // Player has already joined
         }
 
         // Check ban list
         if (BanList.Contains(addr.Address))
         {
+            Console.WriteLine("Ban");
             return;
         }
 
@@ -1370,6 +1374,7 @@ public class HQMServer
         //}
 
         var playerIndex = AddPlayer(name, addr);
+        Console.WriteLine("Player index {0}", playerIndex);
         if (playerIndex.HasValue)
         {
             Console.WriteLine($"{name} ({playerIndex.Value}) joined server from address {addr}");
