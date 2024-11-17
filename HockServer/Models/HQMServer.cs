@@ -1129,6 +1129,7 @@ public class HQMServer
         {
             if (PlayerCount() != 0)
             {
+                Console.WriteLine("Players count {0}", PlayerCount());
                 if (!HasCurrentGameBeenActive)
                 {
                     StartTime = DateTime.UtcNow;
