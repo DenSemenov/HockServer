@@ -1576,9 +1576,11 @@ public class HQMServer
         switch (command)
         {
             case JoinMessage joinCommand:
+                Console.WriteLine("Join {0} v {1} pn {2}", addr, joinCommand.Version, joinCommand.PlayerName);
                 PlayerJoin(addr, joinCommand.Version, joinCommand.PlayerName);
                 break;
             case UpdateMessage updateCommand:
+                Console.WriteLine("UpdateCommand {0} curGame {1}", addr, updateCommand.CurrentGameId);
                 PlayerUpdate(
                     addr,
                     updateCommand.CurrentGameId,
@@ -1591,10 +1593,10 @@ public class HQMServer
                     );
                 break;
             case ExitMessage exitCommand:
+                Console.WriteLine("exitCommand {0} ", addr);
                 PlayerExit(addr);
                 break;
             case ServerInfoMessage serverInfoCommand:
-                Console.WriteLine("Recieved info command {0}", addr);
                 await RequestInfo(socket, addr, serverInfoCommand.Version, serverInfoCommand.Ping, writeBuf);
                 break;
             default:
