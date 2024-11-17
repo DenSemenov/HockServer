@@ -1125,9 +1125,9 @@ public class HQMServer
         UdpClient socket,
         List<byte> writeBuf)
     {
+        Console.WriteLine("Tick");
         try
         {
-            Console.WriteLine("Players count {0}", PlayerCount());
             if (PlayerCount() != 0)
             {
                 if (!HasCurrentGameBeenActive)
