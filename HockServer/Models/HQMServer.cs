@@ -412,7 +412,7 @@ public class HQMServerConfiguration
     public ReplayEnabled ReplaysEnabled { get; set; }= ReplayEnabled.Off;
     public HQMSpawnPoint SpawnPoint { get; set; } = HQMSpawnPoint.Center;
     public object ReplaySaving { get; set; }
-    public string ServerName { get; set; } = "HQM";
+    public string ServerName { get; set; } = "C# implementation";
     public string ServerService { get; set; }
 
     //match config

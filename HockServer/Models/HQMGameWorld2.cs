@@ -732,39 +732,41 @@ public class HQMGameWorld2
 
             foreach (var collisionEvent in collisions)
             {
-                try
+                switch (collisionEvent)
                 {
-                    switch (collisionEvent)
-                    {
-                        case PlayerRinkCollision prc:
-                            var originalVelocity = originalBallVelocities[prc.Indices.Item1][prc.Indices.Item2];
-                            var mutNew = prc.Overlap * 0.03125f * prc.Normal - 0.25f * originalVelocity;
-                            if (Vector3.Dot(mutNew, prc.Normal) > 0.0f)
+                    case PlayerRinkCollision prc:
+                        if (originalBallVelocities.Count > prc.Indices.Item1)
+                        {
+                            if (originalBallVelocities[prc.Indices.Item1].Count > prc.Indices.Item2)
                             {
-                                LimitFriction(ref mutNew, prc.Normal, 0.01f);
-                                var (_, skater) = players[prc.Indices.Item1];
-                                skater.CollisionBalls[prc.Indices.Item2].Velocity += mutNew;
+                                var originalVelocity = originalBallVelocities[prc.Indices.Item1][prc.Indices.Item2];
+                                var mutNew = prc.Overlap * 0.03125f * prc.Normal - 0.25f * originalVelocity;
+                                if (Vector3.Dot(mutNew, prc.Normal) > 0.0f)
+                                {
+                                    LimitFriction(ref mutNew, prc.Normal, 0.01f);
+                                    var (_, skater) = players[prc.Indices.Item1];
+                                    skater.CollisionBalls[prc.Indices.Item2].Velocity += mutNew;
+                                }
                             }
-                            break;
-                        case PlayerPlayerCollision ppc:
-                            var originalVelocity1 = originalBallVelocities[ppc.Indices1.Item1][ppc.Indices1.Item2];
-                            var originalVelocity2 = originalBallVelocities[ppc.Indices2.Item1][ppc.Indices2.Item2];
-                            var mutNew2 = ppc.Normal * (ppc.Overlap * 0.125f) + 0.25f * (originalVelocity2 - originalVelocity1);
-                            if (Vector3.Dot(mutNew2, ppc.Normal) > 0.0f)
-                            {
-                                LimitFriction(ref mutNew2, ppc.Normal, 0.01f);
-                                var (_, skater1) = players[ppc.Indices1.Item1];
-                                var (_, skater2) = players[ppc.Indices2.Item1];
-                                var mass1 = skater1.CollisionBalls[ppc.Indices1.Item2].Mass;
-                                var mass2 = skater2.CollisionBalls[ppc.Indices2.Item2].Mass;
-                                var massSum = mass1 + mass2;
-                                skater1.CollisionBalls[ppc.Indices1.Item2].Velocity += (mass2 / massSum) * mutNew2;
-                                skater2.CollisionBalls[ppc.Indices2.Item2].Velocity -= (mass1 / massSum) * mutNew2;
-                            }
-                            break;
-                    }
+                        }
+                        break;
+                    case PlayerPlayerCollision ppc:
+                        var originalVelocity1 = originalBallVelocities[ppc.Indices1.Item1][ppc.Indices1.Item2];
+                        var originalVelocity2 = originalBallVelocities[ppc.Indices2.Item1][ppc.Indices2.Item2];
+                        var mutNew2 = ppc.Normal * (ppc.Overlap * 0.125f) + 0.25f * (originalVelocity2 - originalVelocity1);
+                        if (Vector3.Dot(mutNew2, ppc.Normal) > 0.0f)
+                        {
+                            LimitFriction(ref mutNew2, ppc.Normal, 0.01f);
+                            var (_, skater1) = players[ppc.Indices1.Item1];
+                            var (_, skater2) = players[ppc.Indices2.Item1];
+                            var mass1 = skater1.CollisionBalls[ppc.Indices1.Item2].Mass;
+                            var mass2 = skater2.CollisionBalls[ppc.Indices2.Item2].Mass;
+                            var massSum = mass1 + mass2;
+                            skater1.CollisionBalls[ppc.Indices1.Item2].Velocity += (mass2 / massSum) * mutNew2;
+                            skater2.CollisionBalls[ppc.Indices2.Item2].Velocity -= (mass1 / massSum) * mutNew2;
+                        }
+                        break;
                 }
-                catch { }
             }
         }
     }
