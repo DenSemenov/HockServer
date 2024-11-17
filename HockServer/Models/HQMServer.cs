@@ -1016,6 +1016,8 @@ public class HQMServer
 
                 byte[] slice = writeBuf.ToArray();
                 await socket.SendAsync(slice, slice.Length, networkPlayer.Addr);
+
+                Console.WriteLine("Sent update to {0}", networkPlayer.Addr);
             }
         }
     }
