@@ -1663,7 +1663,14 @@ public class HQMServer
             var buf = new List<byte>(new byte[4096]);
             var timer = new Timer(async _ =>
             {
-                await server.Tick(socket, buf);
+                try
+                {
+                    await server.Tick(socket, buf);
+                }
+                catch(Exception ex)
+                {
+                    Console.WriteLine(ex.Message + ex.StackTrace);
+                }
             }, null, 0, 10);
 
             var packetStream = Task.Run(async () =>
