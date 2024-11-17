@@ -1320,7 +1320,7 @@ public class HQMServer
             );
             var update = newPlayer.GetUpdateMessage(playerIndex.Value);
 
-            Console.WriteLine("new player {0}", JsonUtility.ToJson(newPlayer));
+            Console.WriteLine("new player {0}", newPlayer.Addr());
 
             Players.Players[playerIndex.Value.Index] = newPlayer;
 
