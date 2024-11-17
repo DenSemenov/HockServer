@@ -96,6 +96,7 @@ public class HQMMessageCodec
         var header = parser.ReadBytesAligned(4);
         if (!header.SequenceEqual(GAME_HEADER))
         {
+            Console.WriteLine("Wrong header");
             throw new HQMClientToServerMessageDecoderException(HQMClientToServerMessageDecoderError.WrongHeader);
         }
 
