@@ -1658,9 +1658,16 @@ public class HQMServer
             var codec = new HQMMessageCodec();
             while (true)
             {
-                var result = await socket.ReceiveAsync();
-                var data = codec.ParseMessage(result.Buffer);
-                await server.HandleMessage(result.RemoteEndPoint, socket, data, new List<byte>(new byte[4096]));
+                try
+                {
+                    var result = await socket.ReceiveAsync();
+                    var data = codec.ParseMessage(result.Buffer);
+                    await server.HandleMessage(result.RemoteEndPoint, socket, data, new List<byte>(new byte[4096]));
+                }
+                catch(Exception ex)
+                {
+                    Console.WriteLine(ex.Message +  ex.StackTrace);
+                }
             }
         });
 
