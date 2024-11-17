@@ -1596,89 +1596,96 @@ public class HQMServer
     }
     public async Task RunServer(ushort port, string publicAddress, HQMServerConfiguration config)
     {
-        var initialValues = GetInitialGameValues();
-
-        var reqwestClient = new HttpClient();
-
-        var server = new HQMServer(config, initialValues.Values, new HQMGameWorld2(initialValues.PhysicsConfiguration, initialValues.PuckSlots));
-
-        Console.WriteLine("Server started");
-
-        var addr = new IPEndPoint(IPAddress.Any, port);
-        var socket = new UdpClient(addr);
-
-        void Tick(object state)
+        try
         {
-            _ = server.Tick(socket, new List<byte>(new byte[4096]));
-        }
+            var initialValues = GetInitialGameValues();
 
-        var tickTimer = new Timer(Tick, null, 0, 10);
+            var reqwestClient = new HttpClient();
 
-        Console.WriteLine($"Server listening at address {socket.Client.LocalEndPoint}");
+            var server = new HQMServer(config, initialValues.Values, new HQMGameWorld2(initialValues.PhysicsConfiguration, initialValues.PuckSlots));
 
+            Console.WriteLine("Server started");
 
-        async Task<IPEndPoint> GetHttpResponse(HttpClient client, string address)
-        {
-            var response = await client.GetAsync(address);
-            var responseText = await response.Content.ReadAsStringAsync();
+            var addr = new IPEndPoint(IPAddress.Any, port);
+            var socket = new UdpClient(addr);
 
-            var split = responseText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-
-            var ip = IPAddress.Parse(split[1]);
-            var port = ushort.Parse(split[2]);
-            return new IPEndPoint(ip, port);
-        }
-
-        if (!string.IsNullOrEmpty(publicAddress))
-        {
-            var publicClient = new HttpClient();
-            var publicAddr = publicAddress;
-
-            _ = Task.Run(async () =>
+            void Tick(object state)
             {
+                _ = server.Tick(socket, new List<byte>(new byte[4096]));
+            }
+
+            var tickTimer = new Timer(Tick, null, 0, 10);
+
+            Console.WriteLine($"Server listening at address {socket.Client.LocalEndPoint}");
+
+
+            async Task<IPEndPoint> GetHttpResponse(HttpClient client, string address)
+            {
+                var response = await client.GetAsync(address);
+                var responseText = await response.Content.ReadAsStringAsync();
+
+                var split = responseText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+
+                var ip = IPAddress.Parse(split[1]);
+                var port = ushort.Parse(split[2]);
+                return new IPEndPoint(ip, port);
+            }
+
+            if (!string.IsNullOrEmpty(publicAddress))
+            {
+                var publicClient = new HttpClient();
+                var publicAddr = publicAddress;
+
+                _ = Task.Run(async () =>
+                {
+                    while (true)
+                    {
+                        try
+                        {
+                            var masterServer = await GetHttpResponse(publicClient, publicAddr);
+                            for (int i = 0; i < 60; i++)
+                            {
+                                var msg = Encoding.ASCII.GetBytes("Hock\x20");
+                                await socket.SendAsync(msg, msg.Length, masterServer);
+                                Console.WriteLine("Sent master query");
+                                await Task.Delay(TimeSpan.FromSeconds(10));
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            Console.WriteLine($"Error: {e.Message}");
+                            await Task.Delay(TimeSpan.FromSeconds(15));
+                        }
+                    }
+                });
+            }
+
+            var packetStream = Task.Run(async () =>
+            {
+                var buf = new byte[512];
+                var codec = new HQMMessageCodec();
                 while (true)
                 {
                     try
                     {
-                        var masterServer = await GetHttpResponse(publicClient, publicAddr);
-                        for (int i = 0; i < 60; i++)
-                        {
-                            var msg = Encoding.ASCII.GetBytes("Hock\x20");
-                            await socket.SendAsync(msg, msg.Length, masterServer);
-                            Console.WriteLine("Sent master query");
-                            await Task.Delay(TimeSpan.FromSeconds(10));
-                        }
+                        var result = await socket.ReceiveAsync();
+                        var data = codec.ParseMessage(result.Buffer);
+                        await server.HandleMessage(result.RemoteEndPoint, socket, data, new List<byte>(new byte[4096]));
                     }
-                    catch (Exception e)
+                    catch (Exception ex)
                     {
-                        Console.WriteLine($"Error: {e.Message}");
-                        await Task.Delay(TimeSpan.FromSeconds(15));
+                        Console.WriteLine(ex.Message + ex.StackTrace);
                     }
                 }
             });
+
+            await Task.WhenAll(packetStream);
+
+            Console.WriteLine("Stopped");
         }
-
-        var packetStream = Task.Run(async () =>
+        catch(Exception ex)
         {
-            var buf = new byte[512];
-            var codec = new HQMMessageCodec();
-            while (true)
-            {
-                try
-                {
-                    var result = await socket.ReceiveAsync();
-                    var data = codec.ParseMessage(result.Buffer);
-                    await server.HandleMessage(result.RemoteEndPoint, socket, data, new List<byte>(new byte[4096]));
-                }
-                catch(Exception ex)
-                {
-                    Console.WriteLine(ex.Message +  ex.StackTrace);
-                }
-            }
-        });
-
-        await Task.WhenAll(packetStream);
-
-        Console.WriteLine("Stopped");
+            Console.WriteLine(ex.Message + ex.StackTrace);
+        }
     }
 }
