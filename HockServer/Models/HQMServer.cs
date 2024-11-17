@@ -1609,12 +1609,12 @@ public class HQMServer
             var addr = new IPEndPoint(IPAddress.Any, port);
             var socket = new UdpClient(addr);
 
-            void Tick(object state)
-            {
-                _ = server.Tick(socket, new List<byte>(new byte[4096]));
-            }
+            //void Tick(object state)
+            //{
+            //    _ = server.Tick(socket, new List<byte>(new byte[4096]));
+            //}
 
-            var tickTimer = new Timer(Tick, null, 0, 10);
+            //var tickTimer = new Timer(Tick, null, 0, 10);
 
             Console.WriteLine($"Server listening at address {socket.Client.LocalEndPoint}");
 
