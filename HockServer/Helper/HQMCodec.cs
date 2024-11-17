@@ -100,6 +100,7 @@ public class HQMMessageCodec
         }
 
         var command = parser.ReadByteAligned();
+        Console.WriteLine("New request with command {0}", command);
         return command switch
         {
             0 => ParseRequestInfo(parser),
