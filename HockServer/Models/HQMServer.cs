@@ -1678,5 +1678,7 @@ public class HQMServer
         });
 
         await Task.WhenAll(packetStream);
+
+        Console.WriteLine("Stopped");
     }
 }
