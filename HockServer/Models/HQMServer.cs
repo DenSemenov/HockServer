@@ -1580,6 +1580,7 @@ public class HQMServer
                 PlayerExit(addr);
                 break;
             case ServerInfoMessage serverInfoCommand:
+                Console.WriteLine("Recieved info command {0}", addr);
                 await RequestInfo(socket, addr, serverInfoCommand.Version, serverInfoCommand.Ping, writeBuf);
                 break;
             default:
@@ -1638,6 +1639,7 @@ public class HQMServer
                         {
                             var msg = Encoding.ASCII.GetBytes("Hock\x20");
                             await publicSocket.SendAsync(msg, msg.Length, masterServer);
+                            Console.WriteLine("Sent master query");
                             await Task.Delay(TimeSpan.FromSeconds(10));
                         }
                     }
