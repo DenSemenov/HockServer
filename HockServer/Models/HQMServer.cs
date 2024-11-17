@@ -1339,6 +1339,8 @@ public class HQMServer
         uint playerVersion,
         string name)
     {
+        Console.WriteLine($"{name} join request {addr}");
+
         int playerCount = PlayerCount();
         var maxPlayerCount = Config.PlayerMax;
         if (playerCount >= maxPlayerCount)
@@ -1362,10 +1364,10 @@ public class HQMServer
         }
 
         // Disabled join
-        if (!AllowJoin)
-        {
-            return;
-        }
+        //if (!AllowJoin)
+        //{
+        //    return;
+        //}
 
         var playerIndex = AddPlayer(name, addr);
         if (playerIndex.HasValue)
