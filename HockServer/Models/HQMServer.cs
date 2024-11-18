@@ -3,6 +3,7 @@ using HockServer.Enums;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -595,18 +596,18 @@ public class HQMServer
     {
         List<(HQMServerPlayerIndex, string)> inactivePlayers = new List<(HQMServerPlayerIndex, string)>();
 
-        //for (int i = 0; i < Players.Players.Count; i++)
-        //{
-        //    HQMServerPlayer player = Players.Players[i];
-        //    if (player !=null && player.Data is HQMNetworkPlayerData networkPlayer)
-        //    {
-        //        networkPlayer.Inactivity += 1;
-        //        if (networkPlayer.Inactivity > 500)
-        //        {
-        //            inactivePlayers.Add((new HQMServerPlayerIndex(i), player.PlayerName));
-        //        }
-        //    }
-        //}
+        for (int i = 0; i < Players.Players.Count; i++)
+        {
+            HQMServerPlayer player = Players.Players[i];
+            if (player != null && player.Data is HQMNetworkPlayerData networkPlayer)
+            {
+                networkPlayer.Inactivity += 1;
+                if (networkPlayer.Inactivity > 500)
+                {
+                    inactivePlayers.Add((new HQMServerPlayerIndex(i), player.PlayerName));
+                }
+            }
+        }
 
         foreach (var (playerIndex, playerName) in inactivePlayers)
         {
@@ -1649,7 +1650,6 @@ public class HQMServer
                             {
                                 var msg = Encoding.ASCII.GetBytes("Hock\x20");
                                 await socket.SendAsync(msg, msg.Length, masterServer);
-                                Console.WriteLine("Sent master query");
                                 await Task.Delay(TimeSpan.FromSeconds(10));
                             }
                         }
