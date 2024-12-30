@@ -12,8 +12,6 @@ public class HQMRink
     public HQMRinkLine BlueZoneBlueLine { get; set; }
     public float Width { get; set; }
     public float Length { get; set; }
-
-    [System.Obsolete]
     public HQMRink(float width, float length, float cornerRadius)
     {
         Vector3 zero = new Vector3(0.0f, 0.0f, 0.0f);

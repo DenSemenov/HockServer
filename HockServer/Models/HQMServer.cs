@@ -1,5 +1,7 @@
 ﻿using HockServer;
 using HockServer.Enums;
+using LiteNetLib;
+using LiteNetLib.Utils;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -13,6 +15,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using UnityEngine;
 using static HQMMessage;
 
@@ -38,13 +41,11 @@ public struct HQMObjectIndex
 
 public class HQMNetworkPlayerData
 {
-    public IPEndPoint Addr { get; set; }
-    public HQMClientVersion ClientVersion { get; set; }
+    public NetPeer Peer { get; set; }
     public uint Inactivity { get; set; }
     public uint KnownPacket { get; set; }
     public int KnownMsgPos { get; set; }
     public byte? ChatRep { get; set; }
-    public uint DeltaTime { get; set; }
     public List<float> LastPing { get; set; }
     public HQMServerPlayerIndex ViewPlayerIndex { get; set; }
     public uint GameId { get; set; }
@@ -82,7 +83,7 @@ public class HQMServerPlayer
     public static HQMServerPlayer NewNetworkPlayer(
         HQMServerPlayerIndex playerIndex,
         string playerName,
-        IPEndPoint addr,
+        NetPeer peer,
         List<HQMMessage> globalMessages)
     {
         return new HQMServerPlayer
@@ -98,13 +99,11 @@ public class HQMServerPlayer
             StickLimit = 0.01f,
             Data = new HQMNetworkPlayerData
             {
-                Addr = addr,
-                ClientVersion = HQMClientVersion.Vanilla,
+                Peer = peer,
                 Inactivity = 0,
                 KnownPacket = uint.MaxValue,
                 KnownMsgPos = 0,
                 ChatRep = null,
-                DeltaTime = 0,
                 LastPing = new List<float>(),
                 ViewPlayerIndex = playerIndex,
                 GameId = uint.MaxValue,
@@ -144,15 +143,6 @@ public class HQMServerPlayer
         {
             networkPlayer.Messages.Add(message);
         }
-    }
-
-    public IPEndPoint Addr()
-    {
-        if (Data is HQMNetworkPlayerData networkPlayer)
-        {
-            return networkPlayer.Addr;
-        }
-        return null;
     }
 
     public PingData PingData()
@@ -522,13 +512,14 @@ public struct ReplayTick
 
 public class HQMServer
 {
+    public event Action<string> onLog;
     private static System.Threading.Timer _timer;
     private static List<byte> _buf = new List<byte>(new byte[4096]);
 
     public static readonly byte[] GAME_HEADER = new byte[] { 0x48, 0x6F, 0x63, 0x6B };
-    public HQMServerPlayerList Players { get; set; }
+    public HQMServerPlayerList Players { get; set; } = new HQMServerPlayerList();
     public HQMServerMessages Messages { get; set; }
-    private HashSet<IPAddress> BanList;
+    private HashSet<IPAddress> BanList = new HashSet<IPAddress>();
     private bool AllowJoin;
     public HQMServerConfiguration Config { get; set; } = new HQMServerConfiguration();
     public HQMGameValues Values { get; set; }
@@ -543,19 +534,18 @@ public class HQMServer
     private bool HasCurrentGameBeenActive;
     private uint Packet;
     private byte[] ReplayData;
-    private int ReplayMsgPos;
-    private uint ReplayLastPacket;
-    private new List<ObjectPacket[]> SavedPackets;
     private new List<DateTime> SavedPings;
     private List<ReplayTick> SavedHistory;
     public int HistoryLength { get; set; }
     private List<(uint, Queue<(HQMObjectIndex, HQMObjectIndex)>)> SavedEvents;
     private Dictionary<int, uint> TeamSwitchTimer = new Dictionary<int, uint>();
+    public NetManager Client { get; set; }
+    public EventBasedNetListener Listener { get; set; }
     public HQMServer()
     {
 
     }
-    public HQMServer(HQMServerConfiguration config, HQMGameValues values, HQMGameWorld2 world)
+    public void Init(HQMServerConfiguration config, HQMGameValues values, HQMGameWorld2 world)
     {
         var playerVec = new List<HQMServerPlayer?>(64);
         for (int i = 0; i < 64; i++)
@@ -583,39 +573,10 @@ public class HQMServer
         HasCurrentGameBeenActive = false;
         Packet = 0;
         ReplayData = new byte[64 * 1024 * 1024];
-        ReplayMsgPos = 0;
-        ReplayLastPacket = 0;
-        SavedPackets = Enumerable.Repeat(new ObjectPacket[32], 192).ToList();
         SavedPings = Enumerable.Repeat(new DateTime(), 100).ToList();
         SavedHistory = new List<ReplayTick>();
         HistoryLength = 0;
         SavedEvents = new List<(uint, Queue<(HQMObjectIndex, HQMObjectIndex)>)>();
-    }
-
-    public void RemoveInactivePlayers()
-    {
-        List<(HQMServerPlayerIndex, string)> inactivePlayers = new List<(HQMServerPlayerIndex, string)>();
-
-        for (int i = 0; i < Players.Players.Count; i++)
-        {
-            HQMServerPlayer player = Players.Players[i];
-            if (player != null && player.Data is HQMNetworkPlayerData networkPlayer)
-            {
-                networkPlayer.Inactivity += 1;
-                if (networkPlayer.Inactivity > 500)
-                {
-                    inactivePlayers.Add((new HQMServerPlayerIndex(i), player.PlayerName));
-                }
-            }
-        }
-
-        foreach (var (playerIndex, playerName) in inactivePlayers)
-        {
-            RemovePlayer(playerIndex, true);
-            Console.WriteLine($"{playerName} ({playerIndex.Index}) timed out");
-            string chatMsg = $"{playerName} timed out";
-            Messages.AddServerChatMessage(chatMsg);
-        }
     }
 
     public bool MoveToSpectator(int playerIndex)
@@ -647,13 +608,13 @@ public class HQMServer
         bool keepStickPosition)
     {
         var player = Players.Players[playerIndex];
-        if (player !=null)
+        if (player != null)
         {
             if (player.Object.HasValue)
             {
                 var (objectIndex, _) = player.Object.Value;
                 var skater = World.Objects[objectIndex.Index] as HQMSkater;
-                if (skater !=null)
+                if (skater != null)
                 {
                     var newSkater = new HQMSkater(pos, rot, player.Hand, player.Mass, player.StickLimit);
                     if (keepStickPosition)
@@ -710,7 +671,7 @@ public class HQMServer
         var skater = SpawnSkater(playerIndex, team, pos, rot, false);
         if (skater.HasValue)
         {
-            Console.WriteLine($"{playerName} ({playerIndex}) has joined team {team}");
+            onLog?.Invoke($"{playerName} ({playerIndex}) has joined team {team}");
             playerCount += 1;
 
             //m.ClearStartedGoalie(playerIndex);
@@ -770,7 +731,7 @@ public class HQMServer
 
         foreach (var (playerIndex, playerName) in spectatingPlayers)
         {
-            Console.WriteLine($"{playerName} ({playerIndex}) is spectating");
+            onLog?.Invoke($"{playerName} ({playerIndex}) is spectating");
             MoveToSpectator(playerIndex);
             var message = $"{playerName} is spectating";
         }
@@ -778,7 +739,7 @@ public class HQMServer
         if (joiningRed.Count > 0 || joiningBlue.Count > 0)
         {
             var (redPlayerCount, bluePlayerCount) = (0, 0);
-            foreach (var player in Players.Players.Where(x=>x !=null))
+            foreach (var player in Players.Players.Where(x => x != null))
             {
                 if (player.Object.HasValue)
                 {
@@ -893,8 +854,6 @@ public class HQMServer
 
         try
         {
-            SavedPackets.RemoveRange(192 - 1, SavedPackets.Count - 192 + 1);
-            SavedPackets.Insert(0, packets);
             Packet = Packet + 1;
             SavedPings.RemoveRange(100 - 1, SavedPings.Count - 100 + 1);
             SavedPings.Insert(0, DateTime.Now);
@@ -909,37 +868,10 @@ public class HQMServer
         //    WriteReplay();
         //}
     }
-    public bool HasPing(HQMClientVersion v)
-    {
-        switch (v)
-        {
-            case HQMClientVersion.Vanilla:
-                return false;
-            case HQMClientVersion.Ping:
-            case HQMClientVersion.PingRules:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    public bool HasRules(HQMClientVersion v)
-    {
-        switch (v)
-        {
-            case HQMClientVersion.Vanilla:
-            case HQMClientVersion.Ping:
-                return false;
-            case HQMClientVersion.PingRules:
-                return true;
-            default:
-                return false;
-        }
-    }
 
     public async Task SendUpdates(
         uint gameId,
-        List<ObjectPacket[]> packets,
+        HQMGameObject[] objects,
         uint gameStep,
         bool gameOver,
         uint redScore,
@@ -950,76 +882,90 @@ public class HQMServer
         HQMRulesState rulesState,
         uint currentPacket,
         List<HQMServerPlayer> players,
-        UdpClient socket,
-        HQMServerPlayerIndex? forceView,
-        List<byte> writeBuf)
+        HQMServerPlayerIndex? forceView)
     {
         foreach (var player in players.Where(x => x != null))
         {
             if (player.Data is HQMNetworkPlayerData networkPlayer)
             {
-                writeBuf.Clear();
-                var writer = new HQMMessageWriter(writeBuf);
+                var writer = new NetDataWriter();
 
                 if (networkPlayer.GameId != gameId)
                 {
-                    writer.WriteBytesAligned(GAME_HEADER);
-                    writer.WriteByteAligned(6);
-                    writer.WriteUInt32Aligned(gameId);
+                    writer.Put((byte)RequestType.PlayerJoinInfo);
+                    writer.Put(gameId);
                 }
                 else
                 {
-                    writer.WriteBytesAligned(GAME_HEADER);
-                    writer.WriteByteAligned(5);
-                    writer.WriteUInt32Aligned(gameId);
-                    writer.WriteUInt32Aligned(gameStep);
-                    writer.WriteBits(1, gameOver ? 1u : 0u);
-                    writer.WriteBits(8, redScore);
-                    writer.WriteBits(8, blueScore);
-                    writer.WriteBits(16, time);
+                    writer.Put((byte)RequestType.PlayerUpdate);
+                    writer.Put(gameId);
+                    writer.Put(gameStep);
+                    writer.Put(gameOver);
+                    writer.Put(redScore);
+                    writer.Put(blueScore);
+                    writer.Put(time);
+                    writer.Put(goalMessageTime);
+                    writer.Put(period);
 
-                    writer.WriteBits(16, goalMessageTime);
-                    writer.WriteBits(8, period);
                     uint view = forceView.HasValue ? (uint)forceView.Value.Index : (uint)networkPlayer.ViewPlayerIndex.Index;
-                    writer.WriteBits(8, view);
+                    writer.Put(view);
 
-                    // if using a non-cryptic version, send ping
-                    if (HasPing(networkPlayer.ClientVersion))
-                    {
-                        writer.WriteUInt32Aligned(networkPlayer.DeltaTime);
-                    }
+                    writer.Put(currentPacket);
+                    writer.Put(networkPlayer.KnownPacket);
 
-                    // if baba's second version or above, send rules
-                    if (HasRules(networkPlayer.ClientVersion))
+                    for (var i = 0; i < 32; i++)
                     {
-                        uint num = rulesState switch
+                        var current = objects[i];
+                        switch (current)
                         {
-                            HQMRulesState.Regular { OffsideWarning: true, IcingWarning: true } => 3,
-                            HQMRulesState.Regular { OffsideWarning: true, IcingWarning: false } => 1,
-                            HQMRulesState.Regular { OffsideWarning: false, IcingWarning: true } => 2,
-                            HQMRulesState.Offside { } => 4,
-                            HQMRulesState.Icing { } => 8,
-                            _ => 0
-                        };
-                        writer.WriteUInt32Aligned(num);
+                            case HQMPuck puck:
+                                writer.Put(1);
+                                writer.Put(puck.Position.x);
+                                writer.Put(puck.Position.y);
+                                writer.Put(puck.Position.z);
+                                writer.Put(puck.Rotation.x);
+                                writer.Put(puck.Rotation.y);
+                                writer.Put(puck.Rotation.z);
+                                writer.Put(puck.Rotation.w);
+                                break;
+                            case HQMSkater skater:
+                                writer.Put(2);
+                                writer.Put(skater.Position.x);
+                                writer.Put(skater.Position.y);
+                                writer.Put(skater.Position.z);
+                                writer.Put(skater.Rotation.x);
+                                writer.Put(skater.Rotation.y);
+                                writer.Put(skater.Rotation.z);
+                                writer.Put(skater.Rotation.w);
+                                writer.Put(skater.StickPos.x);
+                                writer.Put(skater.StickPos.y);
+                                writer.Put(skater.StickPos.z);
+                                writer.Put(skater.StickRot.x);
+                                writer.Put(skater.StickRot.y);
+                                writer.Put(skater.StickRot.z);
+                                writer.Put(skater.StickRot.w);
+                                writer.Put(skater.HeadRot);
+                                writer.Put(skater.BodyRot);
+                                break;
+                            default:
+                                writer.Put(0);
+                                break;
+                        }
                     }
-
-                    writer.WriteObjects(packets, currentPacket, networkPlayer.KnownPacket);
 
                     int start = networkPlayer.KnownMsgPos > networkPlayer.Messages.Count ? networkPlayer.Messages.Count : networkPlayer.KnownMsgPos;
                     int remainingMessages = Math.Min(networkPlayer.Messages.Count - start, 15);
 
-                    writer.WriteBits(4, (uint)remainingMessages);
-                    writer.WriteBits(16, (uint)start);
+                    writer.Put(remainingMessages);
+                    writer.Put(start);
 
                     for (int i = start; i < start + remainingMessages; i++)
                     {
-                        writer.WriteMessage(networkPlayer.Messages[i]);
+                        WriteMessage(writer, networkPlayer.Messages[i]);
                     }
                 }
 
-                byte[] slice = writeBuf.ToArray();
-                await socket.SendAsync(slice, slice.Length, networkPlayer.Addr);
+                networkPlayer.Peer.Send(writer, DeliveryMethod.Unreliable);
             }
         }
     }
@@ -1031,12 +977,8 @@ public class HQMServer
         GameId += 1;
         Messages.Clear();
 
-        ReplayMsgPos = 0;
         Packet = uint.MaxValue;
-        ReplayLastPacket = uint.MaxValue;
         GameStep = uint.MaxValue;
-
-        SavedPackets = Enumerable.Repeat(new ObjectPacket[32], 192).ToList();
         SavedPings = Enumerable.Repeat(new DateTime(), 100).ToList();
         SavedHistory.Clear();
         ReplayQueue.Clear();
@@ -1068,7 +1010,8 @@ public class HQMServer
                         }
                         catch (Exception e)
                         {
-                            Console.WriteLine(e);
+                            onLog?.Invoke(e.Message);
+                            onLog?.Invoke(e.StackTrace);
                         }
                     });
                     break;
@@ -1089,7 +1032,7 @@ public class HQMServer
                     //        }
                     //        catch (Exception e)
                     //        {
-                    //            Console.WriteLine(e);
+                    //            onLog?.Invoke(e);
                     //        }
                     //    });
                     //    break;
@@ -1123,14 +1066,13 @@ public class HQMServer
         }
     }
 
-    public async Task Tick(
-        UdpClient socket,
-        List<byte> writeBuf)
+    public async Task Tick()
     {
         try
         {
             if (PlayerCount() != 0)
             {
+                Stopwatch sw = Stopwatch.StartNew();
                 if (!HasCurrentGameBeenActive)
                 {
                     StartTime = DateTime.UtcNow;
@@ -1148,45 +1090,15 @@ public class HQMServer
                         World.CreatePuckObject(pos, Quaternion.identity);
                     }
 
-                    Console.WriteLine($"New game {GameId} started");
+                    onLog?.Invoke($"New game {GameId} started");
                 }
 
                 uint gameStep = GameStep;
                 HQMServerPlayerIndex? forcedView = null;
-                RemoveInactivePlayers();
 
-                ReplayTick? tick = null;
-                if (ReplayQueue.Count > 0)
-                {
-                    ReplayElement replayElement = ReplayQueue[0];
-                    if (replayElement.Data.Count > 0)
-                    {
-                        tick = replayElement.Data[0];
-                        replayElement.Data.RemoveAt(0);
-                        forcedView = replayElement.ForceView;
-                    }
-                    else
-                    {
-                        ReplayQueue.RemoveAt(0);
-                    }
-                }
+                RunGameStep();
 
-                if (tick != null)
-                {
-                    gameStep = tick.Value.GameStep;
-                    var packets = tick.Value.Packets;
-                    SavedPackets.RemoveRange(192 - 1, SavedPackets.Count - 192 + 1);
-                    SavedPackets.Insert(0, packets);
-                    SavedPings.RemoveRange(100 - 1, SavedPings.Count - 100 + 1);
-                    SavedPings.Insert(0, DateTime.Now);
-
-                    Packet = Packet + 1;
-                }
-                else
-                {
-                    RunGameStep();
-                    forcedView = null;
-                }
+                forcedView = null;
 
                 foreach (var (rec, message) in Messages.WaitingMessages)
                 {
@@ -1211,7 +1123,7 @@ public class HQMServer
 
                 await SendUpdates(
                     GameId,
-                    SavedPackets,
+                    World.Objects,
                     gameStep,
                     Values.GameOver,
                     Values.RedScore,
@@ -1222,9 +1134,12 @@ public class HQMServer
                     Values.RulesState,
                     Packet,
                     Players.Players,
-                    socket,
-                    forcedView,
-                    writeBuf);
+                    forcedView
+                    );
+
+
+                sw.Stop();
+                Console.WriteLine(sw.ElapsedMilliseconds);
 
                 while (RequestedReplays.Count > 0)
                 {
@@ -1241,17 +1156,20 @@ public class HQMServer
                     var data = SavedHistory.GetRange((int)iEnd, (int)iStart - (int)iEnd + 1);
                     ReplayQueue.Add(new ReplayElement { Data = data, ForceView = forceView });
                 }
+
+
             }
             else if (HasCurrentGameBeenActive)
             {
-                Console.WriteLine($"Game {GameId} abandoned");
+                onLog?.Invoke($"Game {GameId} abandoned");
                 NewGame(GetInitialGameValues());
                 AllowJoin = true;
             }
         }
         catch (Exception e)
         {
-            Console.WriteLine(e);
+            onLog?.Invoke(e.Message);
+            onLog?.Invoke(e.StackTrace);
         }
     }
 
@@ -1279,14 +1197,14 @@ public class HQMServer
         return Players.Players.Count(x => x != null);
     }
 
-    public HQMServerPlayerIndex? FindPlayerSlot(IPEndPoint addr)
+    public HQMServerPlayerIndex? FindPlayerSlot(NetPeer peer)
     {
         var i = 0;
         foreach (var kvp in Players.Players)
         {
             if (kvp != null && kvp.Data is HQMNetworkPlayerData networkPlayer)
             {
-                if (networkPlayer.Addr.Equals(addr))
+                if (networkPlayer.Peer.Address.Equals(peer.Address))
                 {
                     return new HQMServerPlayerIndex(i);
                 }
@@ -1308,7 +1226,7 @@ public class HQMServer
         return null;
     }
 
-    public HQMServerPlayerIndex? AddPlayer(string playerName, IPEndPoint addr)
+    public HQMServerPlayerIndex? AddPlayer(string playerName, NetPeer peer)
     {
         var playerIndex = FindEmptyPlayerSlot();
         if (playerIndex.HasValue)
@@ -1316,7 +1234,7 @@ public class HQMServer
             var newPlayer = HQMServerPlayer.NewNetworkPlayer(
                 playerIndex.Value,
                 playerName,
-                addr,
+                peer,
                 Messages.PersistentMessages
             );
             var update = newPlayer.GetUpdateMessage(playerIndex.Value);
@@ -1338,8 +1256,7 @@ public class HQMServer
     }
 
     public void PlayerJoin(
-        IPEndPoint addr,
-        uint playerVersion,
+        NetPeer peer,
         string name)
     {
 
@@ -1347,34 +1264,23 @@ public class HQMServer
         var maxPlayerCount = Config.PlayerMax;
         if (playerCount >= maxPlayerCount)
         {
-            return; // Ignore join request
+            return; 
         }
-        if (playerVersion != 55)
-        {
-            return; // Not the right version
-        }
-        var currentSlot = FindPlayerSlot(addr);
+        var currentSlot = FindPlayerSlot(peer);
         if (currentSlot.HasValue)
         {
-            return; // Player has already joined
+            return; 
         }
 
-        // Check ban list
-        if (BanList.Contains(addr.Address))
+        if (BanList.Contains(peer.Address))
         {
             return;
         }
 
-        // Disabled join
-        //if (!AllowJoin)
-        //{
-        //    return;
-        //}
-
-        var playerIndex = AddPlayer(name, addr);
+        var playerIndex = AddPlayer(name, peer);
         if (playerIndex.HasValue)
         {
-            Console.WriteLine($"{name} ({playerIndex.Value}) joined server from address {addr}");
+            onLog?.Invoke($"{name} ({playerIndex.Value}) joined server from address {peer.Address}");
             string msg = $"{name} joined";
             Messages.AddServerChatMessage(msg);
         }
@@ -1443,15 +1349,15 @@ public class HQMServer
         }
     }
 
-    public void PlayerExit(IPEndPoint addr)
+    public void PlayerExit(NetPeer peer)
     {
-        var playerIndex = FindPlayerSlot(addr);
+        var playerIndex = FindPlayerSlot(peer);
 
         if (playerIndex.HasValue)
         {
             var playerName = Players.Players[playerIndex.Value.Index].PlayerName;
             RemovePlayer(playerIndex.Value, true);
-            Console.WriteLine($"{playerName} ({playerIndex.Value}) exited server");
+            onLog?.Invoke($"{playerName} ({playerIndex.Value}) exited server");
             string msg = $"{playerName} exited";
             Messages.AddServerChatMessage(msg);
         }
@@ -1483,7 +1389,7 @@ public class HQMServer
                     switch (player.IsMuted)
                     {
                         case HQMMuteStatus.NotMuted:
-                            Console.WriteLine($"{player.PlayerName} ({playerIndex.Index}): {msg}");
+                            onLog?.Invoke($"{player.PlayerName} ({playerIndex.Index}): {msg}");
                             Messages.AddUserChatMessage(msg, playerIndex);
                             break;
                         case HQMMuteStatus.ShadowMuted:
@@ -1498,16 +1404,14 @@ public class HQMServer
     }
 
     public void PlayerUpdate(
-        IPEndPoint addr,
+        NetPeer peer,
         uint currentGameId,
         HQMPlayerInput input,
-        uint? deltatime,
         uint newKnownPacket,
         int knownMsgpos,
-        (byte, string)? chat,
-        HQMClientVersion clientVersion)
+        (byte, string)? chat)
     {
-        HQMServerPlayerIndex? currentSlot = FindPlayerSlot(addr);
+        HQMServerPlayerIndex? currentSlot = FindPlayerSlot(peer);
         if (currentSlot.HasValue)
         {
             HQMServerPlayer player = Players.Players[currentSlot.Value.Index];
@@ -1536,15 +1440,10 @@ public class HQMServer
                 }
 
                 networkPlayer.Inactivity = 0;
-                networkPlayer.ClientVersion = clientVersion;
                 networkPlayer.KnownPacket = newKnownPacket;
                 player.Input = input;
                 networkPlayer.GameId = currentGameId;
                 networkPlayer.KnownMsgPos = knownMsgpos;
-                if (deltatime.HasValue)
-                {
-                    networkPlayer.DeltaTime = deltatime.Value;
-                }
 
                 if (chat.HasValue)
                 {
@@ -1559,135 +1458,148 @@ public class HQMServer
         }
     }
 
-    public async Task HandleMessage(
-        IPEndPoint addr,
-        UdpClient socket,
-        HQMClientToServerMessage command,
-        List<byte> writeBuf)
+    public void HandleMessage(
+        NetPeer peer,
+        HQMClientToServerMessage command)
     {
         switch (command)
         {
             case JoinMessage joinCommand:
-                PlayerJoin(addr, joinCommand.Version, joinCommand.PlayerName);
+                PlayerJoin(peer, joinCommand.PlayerName);
                 break;
             case UpdateMessage updateCommand:
                 PlayerUpdate(
-                    addr,
+                    peer,
                     updateCommand.CurrentGameId,
                     updateCommand.Input,
-                    updateCommand.Deltatime,
                     updateCommand.NewKnownPacket,
                     updateCommand.KnownMsgPos,
-                    updateCommand.Chat,
-                    updateCommand.Version
+                    updateCommand.Chat
                     );
                 break;
             case ExitMessage exitCommand:
-                PlayerExit(addr);
-                break;
-            case ServerInfoMessage serverInfoCommand:
-                await RequestInfo(socket, addr, serverInfoCommand.Version, serverInfoCommand.Ping, writeBuf);
+                PlayerExit(peer);
                 break;
             default:
                 throw new ArgumentException("Unknown command type");
         }
     }
-    public async Task RunServer(ushort port, string publicAddress, HQMServerConfiguration config)
+    public void RunServer(ushort port, HQMServerConfiguration config)
     {
         try
         {
+            onLog?.Invoke("Server starting");
             var initialValues = GetInitialGameValues();
 
-            var reqwestClient = new HttpClient();
+            Init(config, initialValues.Values, new HQMGameWorld2(initialValues.PhysicsConfiguration, initialValues.PuckSlots));
 
-            var server = new HQMServer(config, initialValues.Values, new HQMGameWorld2(initialValues.PhysicsConfiguration, initialValues.PuckSlots));
+            onLog?.Invoke("Server started");
 
-            Console.WriteLine("Server started");
+            Listener = new EventBasedNetListener();
+            Listener.ConnectionRequestEvent += request =>
+            {
 
-            var addr = new IPEndPoint(IPAddress.Any, port);
-            var socket = new UdpClient(addr);
+                var type = request.Data.GetByte();
+
+                if (type == (byte)RequestType.Join)
+                {
+                    var peer = request.Accept();
+
+                    var name = request.Data.GetString();
+
+                    PlayerJoin(peer, name);
+                }
+                else
+                {
+                    request.Reject();
+                }
+            };
+            Listener.PeerConnectedEvent += PeerConnectedEvent;
+            Listener.PeerDisconnectedEvent += PeerDisconnectedEvent;
+            Listener.NetworkReceiveEvent += NetworkReceiveEvent;
+            Client = new NetManager(Listener);
+            Client.MaxConnectAttempts = 10000;
+            Client.ReconnectDelay = 1000;
+            Client.Start(port);
 
             _timer = new System.Threading.Timer(async _ =>
             {
                 try
                 {
-                    await server.Tick(socket, _buf);
+                    await Tick();
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Timer callback error: {ex.Message}\n{ex.StackTrace}");
+                    onLog?.Invoke($"Timer callback error: {ex.Message}\n{ex.StackTrace}");
                 }
             }, null, 0, 10);
 
-            Console.WriteLine($"Server listening at address {socket.Client.LocalEndPoint}");
-
-
-            async Task<IPEndPoint> GetHttpResponse(HttpClient client, string address)
+            while (true)
             {
-                var response = await client.GetAsync(address);
-                var responseText = await response.Content.ReadAsStringAsync();
-
-                var split = responseText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-
-                var ip = IPAddress.Parse(split[1]);
-                var port = ushort.Parse(split[2]);
-                return new IPEndPoint(ip, port);
+                Client.PollEvents();
             }
 
-            if (!string.IsNullOrEmpty(publicAddress))
-            {
-                var publicClient = new HttpClient();
-                var publicAddr = publicAddress;
 
-                _ = Task.Run(async () =>
-                {
-                    while (true)
-                    {
-                        try
-                        {
-                            var masterServer = await GetHttpResponse(publicClient, publicAddr);
-                            for (int i = 0; i < 60; i++)
-                            {
-                                var msg = Encoding.ASCII.GetBytes("Hock\x20");
-                                await socket.SendAsync(msg, msg.Length, masterServer);
-                                await Task.Delay(TimeSpan.FromSeconds(10));
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine($"Error: {e.Message}");
-                            await Task.Delay(TimeSpan.FromSeconds(15));
-                        }
-                    }
-                });
-            }
-
-            var packetStream = Task.Run(async () =>
-            {
-                var buf = new byte[512];
-                var codec = new HQMMessageCodec();
-                while (true)
-                {
-                    try
-                    {
-                        var result = await socket.ReceiveAsync();
-                        var data = codec.ParseMessage(result.Buffer);
-                        await server.HandleMessage(result.RemoteEndPoint, socket, data, new List<byte>(new byte[4096]));
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.Message + ex.StackTrace);
-                    }
-                }
-            });
-
-            await Task.WhenAll(packetStream);
-
-            Console.WriteLine("Stopped");
+            onLog?.Invoke("Server stopped");
         }
-        catch(Exception ex)
+        catch (Exception ex)
         {
-            Console.WriteLine(ex.Message + ex.StackTrace);
+            onLog?.Invoke(ex.Message + ex.StackTrace);
+        }
+    }
+
+    private void PeerConnectedEvent(NetPeer peer)
+    {
+
+    }
+
+    private void PeerDisconnectedEvent(NetPeer peer, DisconnectInfo disconnectInfo)
+    {
+        var player = Players.Players.FirstOrDefault(x => x!=null && x.Data.Peer == peer);
+        if (player != null)
+        {
+            var playerSlot = FindPlayerSlot(peer);
+
+            RemovePlayer(playerSlot.Value, true);
+            onLog?.Invoke($"{player.PlayerName} ({playerSlot.Value.Index}) timed out");
+            string chatMsg = $"{player.PlayerName} {disconnectInfo.Reason}";
+            Messages.AddServerChatMessage(chatMsg);
+        }
+    }
+
+    private void NetworkReceiveEvent(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod deliveryMethod)
+    {
+        var data = HQMMessageCodec.ParseMessage(reader);
+        HandleMessage(peer, data);
+    }
+
+    public static void WriteMessage(NetDataWriter writer, HQMMessage message)
+    {
+        switch (message.Type)
+        {
+            case HQMMessageType.Chat:
+                var chat = message.Data as ChatItem;
+                writer.Put(2);
+                writer.Put(chat.PlayerIndex.HasValue ? (uint)chat.PlayerIndex.Value.Index : uint.MaxValue);
+                writer.Put(chat.Message);
+                break;
+            case HQMMessageType.Goal:
+                var goal = message.Data as GoalItem;
+                writer.Put(1);
+                writer.Put((uint)goal.Team);
+                writer.Put(goal.GoalIndex.HasValue ? (uint)goal.GoalIndex.Value.Index : uint.MaxValue);
+                writer.Put(goal.AssistIndex.HasValue ? (uint)goal.AssistIndex.Value.Index : uint.MaxValue);
+                break;
+            case HQMMessageType.PlayerUpdate:
+                var playerUpdate = message.Data as PlayerUpdateItem;
+                writer.Put(0);
+                writer.Put((uint)playerUpdate.Index.Index);
+                writer.Put(playerUpdate.InServer);
+                var (objectIndex, teamNum) = playerUpdate.ObjectInfo.HasValue ? ((uint)playerUpdate.ObjectInfo.Value.Item1.Index, (uint)playerUpdate.ObjectInfo.Value.Item2) : (uint.MaxValue, uint.MaxValue);
+                writer.Put(teamNum);
+                writer.Put(objectIndex);
+                writer.Put(playerUpdate.Name);
+                break;
         }
     }
 }

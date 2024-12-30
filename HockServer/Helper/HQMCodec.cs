@@ -1,10 +1,13 @@
-﻿using System;
+﻿using HockServer.Enums;
+using LiteNetLib;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using UnityEngine;
+using UnityEngine.Analytics;
 using static HQMMessage;
 
 
@@ -16,12 +19,10 @@ public interface HQMClientToServerMessage
 
 public class JoinMessage : HQMClientToServerMessage
 {
-    public uint Version { get; set; }
     public string PlayerName { get; set; }
 
-    public JoinMessage(uint version, string playerName)
+    public JoinMessage(string playerName)
     {
-        Version = version;
         PlayerName = playerName;
     }
 }
@@ -30,21 +31,17 @@ public class UpdateMessage : HQMClientToServerMessage
 {
     public uint CurrentGameId { get; set; }
     public HQMPlayerInput Input { get; set; }
-    public uint? Deltatime { get; set; }
     public uint NewKnownPacket { get; set; }
     public int KnownMsgPos { get; set; }
     public (byte, string)? Chat { get; set; }
-    public HQMClientVersion Version { get; set; }
 
-    public UpdateMessage(uint currentGameId, HQMPlayerInput input, uint? deltatime, uint newKnownPacket, int knownMsgPos, (byte, string)? chat, HQMClientVersion version)
+    public UpdateMessage(uint currentGameId, HQMPlayerInput input, uint newKnownPacket, int knownMsgPos, (byte, string)? chat)
     {
         CurrentGameId = currentGameId;
         Input = input;
-        Deltatime = deltatime;
         NewKnownPacket = newKnownPacket;
         KnownMsgPos = knownMsgPos;
         Chat = chat;
-        Version = version;
     }
 }
 
@@ -65,121 +62,65 @@ public class ServerInfoMessage : HQMClientToServerMessage
     }
 }
 
-public enum HQMClientVersion
+public static class HQMMessageCodec
 {
-    Vanilla,
-    Ping,
-    PingRules,
-}
-
-
-
-public class HQMMessageCodec
-{
-    private static readonly byte[] GAME_HEADER = Encoding.ASCII.GetBytes("Hock");
-    public bool HasPing(HQMClientVersion v)
+    public static HQMClientToServerMessage ParseMessage(NetPacketReader reader)
     {
-        switch (v)
+        var type = (RequestType)reader.GetByte();
+
+        if (type == RequestType.Join)
         {
-            case HQMClientVersion.Vanilla:
-                return false;
-            case HQMClientVersion.Ping:
-            case HQMClientVersion.PingRules:
-                return true;
-            default:
-                return false;
+            var name = reader.GetString();
+            return new JoinMessage(name);
         }
-    }
-    public HQMClientToServerMessage ParseMessage(byte[] src)
-    {
-        var parser = new HQMMessageReader(src);
-        var header = parser.ReadBytesAligned(4);
-        if (!header.SequenceEqual(GAME_HEADER))
+        else if (type == RequestType.Input)
         {
-            Console.WriteLine("Wrong header");
-            throw new HQMClientToServerMessageDecoderException(HQMClientToServerMessageDecoderError.WrongHeader);
+            var currentGameId = reader.GetUInt();
+            var inputStickAngle = reader.GetFloat();
+            var inputTurn = reader.GetFloat();
+            var inputFwbw = reader.GetFloat();
+            var inputStickRot1 = reader.GetFloat();
+            var inputStickRot2 = reader.GetFloat();
+            var inputHeadRot = reader.GetFloat();
+            var inputBodyRot = reader.GetFloat();
+            var inputKeys = reader.GetUInt();
+            var input = new HQMPlayerInput
+            {
+                StickAngle = inputStickAngle,
+                Turn = inputTurn,
+                Fwbw = inputFwbw,
+                Stick = new Vector2(inputStickRot1, inputStickRot2),
+                HeadRot = inputHeadRot,
+                BodyRot = inputBodyRot,
+                Keys = inputKeys
+            };
+
+            var newKnownPacket = reader.GetUInt();
+            var knownMsgPos = reader.GetInt();
+
+            bool hasChatMsg = reader.GetBool();
+            (byte, string)? chatMsg;
+            if (hasChatMsg)
+            {
+                byte rep = reader.GetByte();
+                var message = reader.GetString();
+                chatMsg = (rep, message);
+            }
+            else
+            {
+                chatMsg = null;
+            }
+
+            return new UpdateMessage(currentGameId, input, newKnownPacket, knownMsgPos, chatMsg);
         }
-
-        var command = parser.ReadByteAligned();
-        return command switch
+        else if (type == RequestType.Exit)
         {
-            0 => ParseRequestInfo(parser),
-            2 => ParsePlayerJoin(parser),
-            4 => ParsePlayerUpdate(parser, HQMClientVersion.Vanilla),
-            8 => ParsePlayerUpdate(parser, HQMClientVersion.Ping),
-            0x10 => ParsePlayerUpdate(parser, HQMClientVersion.PingRules),
-            7 => new ExitMessage(),
-            _ => throw new HQMClientToServerMessageDecoderException(HQMClientToServerMessageDecoderError.UnknownType),
-        };
-    }
-
-    private HQMClientToServerMessage ParseRequestInfo(HQMMessageReader parser)
-    {
-        var version = parser.ReadBits(8);
-        var ping = parser.ReadU32Aligned();
-        return new ServerInfoMessage(version, ping);
-    }
-
-    private HQMClientToServerMessage ParsePlayerJoin(HQMMessageReader parser)
-    {
-        var version = parser.ReadBits(8);
-        var playerName = parser.ReadBytesAligned(32);
-        return new JoinMessage(version, GetPlayerName(playerName.ToArray()));
-    }
-
-    private HQMClientToServerMessage ParsePlayerUpdate(HQMMessageReader parser, HQMClientVersion clientVersion)
-    {
-        var currentGameId = parser.ReadU32Aligned();
-
-        var inputStickAngle = parser.ReadF32Aligned();
-        var inputTurn = parser.ReadF32Aligned();
-        var _inputUnknown = parser.ReadF32Aligned();
-        var inputFwbw = parser.ReadF32Aligned();
-        var inputStickRot1 = parser.ReadF32Aligned();
-        var inputStickRot2 = parser.ReadF32Aligned();
-        var inputHeadRot = parser.ReadF32Aligned();
-        var inputBodyRot = parser.ReadF32Aligned();
-        var inputKeys = parser.ReadU32Aligned();
-        var input = new HQMPlayerInput
-        {
-            StickAngle = inputStickAngle,
-            Turn = inputTurn,
-            Fwbw = inputFwbw,
-            Stick = new Vector2(inputStickRot1, inputStickRot2),
-            HeadRot = inputHeadRot,
-            BodyRot = inputBodyRot,
-            Keys = inputKeys
-        };
-
-        uint? deltaTime = HasPing(clientVersion) ? parser.ReadU32Aligned() : 0;
-
-        var newKnownPacket = parser.ReadU32Aligned();
-        var knownMsgPos = parser.ReadU16Aligned();
-
-        bool hasChatMsg = parser.ReadBits(1) == 1;
-        (byte, string)? chatMsg;
-        if (hasChatMsg)
-        {
-            byte rep = (byte)parser.ReadBits(3);
-            int byteNum = (int)parser.ReadBits(8);
-            var message = parser.ReadBytesAligned(byteNum);
-            var msg = Encoding.UTF8.GetString(message.ToArray());
-            chatMsg = (rep, msg);
+            return new ExitMessage();
         }
         else
         {
-            chatMsg =  null;
+            return null;
         }
-
-        return new UpdateMessage(currentGameId, input, deltaTime, newKnownPacket, knownMsgPos, chatMsg, clientVersion);
-    }
-
-    private string GetPlayerName(byte[] bytes)
-    {
-        var firstNull = Array.IndexOf(bytes, (byte)0);
-        var nameBytes = firstNull >= 0 ? bytes.Take(firstNull).ToArray() : bytes;
-        var name = Encoding.UTF8.GetString(nameBytes);
-        return string.IsNullOrEmpty(name) ? "Noname" : name;
     }
 }
 
@@ -314,190 +255,6 @@ public class HQMMessageWriter
         }
     }
 }
-
-public class HQMMessageReader
-{
-    private int bufLength;
-    private BitArray buf;
-    public int pos;
-    public byte bitPos;
-    public BitArray safeGetByteChunk = new BitArray(8);
-    public byte[] safeGetByteResultArray = new byte[1];
-    private byte readByteAlignedRes;
-    public List<byte> readBytesAlignedRes = new List<byte>();
-    public ushort readU16AlignedB1;
-    public ushort readU16AlignedB2;
-    public byte readU32AlignedB1;
-    public byte readU32AlignedB2;
-    public byte readU32AlignedB3;
-    public byte readU32AlignedB4;
-    public byte[] readU32AlignedBytes = new byte[4];
-    public uint readF32AlignedI;
-    public uint readPosType;
-    public int readPosSignedOldValue;
-    public int readPosDiff;
-    public int readBitsSignedA;
-    public byte readBitsBitsRemaining;
-    public uint readBitsRes;
-    public byte readBitsP;
-    public byte readBitsPosWBits;
-    public byte readBitsBits;
-    public uint readBitsMask;
-    public uint readBitsA;
-
-    public HQMMessageReader(byte[] inputData)
-    {
-        buf = new BitArray(inputData);
-        bufLength = buf.Length;
-    }
-
-    public int GetPos()
-    {
-        return pos;
-    }
-
-    public byte SafeGetByte(int inPos)
-    {
-        if (inPos < bufLength)
-        {
-            for (int i = 0; i < 8; i++)
-            {
-                safeGetByteChunk[i] = buf[inPos + i];
-            }
-            safeGetByteChunk.CopyTo(safeGetByteResultArray, 0);
-            return safeGetByteResultArray[0];
-        }
-        return 0;
-    }
-
-    public byte ReadByteAligned()
-    {
-        Align();
-        readByteAlignedRes = SafeGetByte(pos);
-        pos += 8;
-        return readByteAlignedRes;
-    }
-
-    public List<byte> ReadBytesAligned(int n)
-    {
-        Align();
-        readBytesAlignedRes.Clear();
-        for (int i = pos; i < pos + n * 8; i += 8)
-        {
-            readBytesAlignedRes.Add(SafeGetByte(i));
-        }
-        pos += n * 8;
-        return readBytesAlignedRes;
-    }
-
-    public ushort ReadU16Aligned()
-    {
-        Align();
-        readU16AlignedB1 = (ushort)SafeGetByte(pos);
-        readU16AlignedB2 = (ushort)SafeGetByte(pos + 8);
-        pos += 16;
-        return (ushort)((int)readU16AlignedB1 | (int)readU16AlignedB2 << 8);
-    }
-
-    public uint ReadU32Aligned()
-    {
-        Align();
-        readU32AlignedB1 = SafeGetByte(pos);
-        readU32AlignedB2 = SafeGetByte(pos + 8);
-        readU32AlignedB3 = SafeGetByte(pos + 16);
-        readU32AlignedB4 = SafeGetByte(pos + 24);
-        pos += 32;
-        readU32AlignedBytes[0] = readU32AlignedB1;
-        readU32AlignedBytes[1] = readU32AlignedB2;
-        readU32AlignedBytes[2] = readU32AlignedB3;
-        readU32AlignedBytes[3] = readU32AlignedB4;
-        return BitConverter.ToUInt32(readU32AlignedBytes, 0);
-    }
-
-    public float ReadF32Aligned()
-    {
-        readF32AlignedI = ReadU32Aligned();
-        return BitConverter.ToSingle(BitConverter.GetBytes(readF32AlignedI), 0);
-    }
-
-    public uint ReadPos(byte b, uint oldValue)
-    {
-        readPosType = ReadBits(2);
-        readPosSignedOldValue = (int)oldValue;
-        readPosDiff = 0;
-        switch (readPosType)
-        {
-            case 0U:
-                readPosDiff = ReadBitsSigned(3);
-                return (uint)Math.Max(0, readPosSignedOldValue + readPosDiff);
-            case 1U:
-                readPosDiff = ReadBitsSigned(6);
-                return (uint)Math.Max(0, readPosSignedOldValue + readPosDiff);
-            case 2U:
-                readPosDiff = ReadBitsSigned(12);
-                return (uint)Math.Max(0, readPosSignedOldValue + readPosDiff);
-            case 3U:
-                return ReadBits(b);
-            default:
-                Console.WriteLine("NONPOS");
-                return 0U;
-        }
-    }
-
-    public int ReadBitsSigned(byte b)
-    {
-        readBitsSignedA = (int)ReadBits(b);
-        if (readBitsSignedA >= 1 << (int)(b - 1))
-        {
-            return -1 << (int)b | readBitsSignedA;
-        }
-        return readBitsSignedA;
-    }
-
-    public uint ReadBits(byte b)
-    {
-        readBitsBitsRemaining = b;
-        readBitsRes = 0U;
-        readBitsP = 0;
-        while (readBitsBitsRemaining > 0)
-        {
-            readBitsPosWBits = (byte)(8 - bitPos);
-            readBitsBits = Math.Min(readBitsBitsRemaining, readBitsPosWBits);
-            readBitsMask = ~(uint.MaxValue << (int)readBitsBits);
-            readBitsA = ((uint)SafeGetByte(pos) >> (int)bitPos & readBitsMask);
-            readBitsRes |= readBitsA << (int)readBitsP;
-            if (readBitsBitsRemaining >= readBitsPosWBits)
-            {
-                readBitsBitsRemaining -= readBitsPosWBits;
-                bitPos = 0;
-                pos += 8;
-                readBitsP += readBitsBits;
-            }
-            else
-            {
-                bitPos += readBitsBitsRemaining;
-                readBitsBitsRemaining = 0;
-            }
-        }
-        return readBitsRes;
-    }
-
-    public void Align()
-    {
-        if (bitPos > 0)
-        {
-            bitPos = 0;
-            pos += 8;
-        }
-    }
-
-    public void Next()
-    {
-        bitPos = 0;
-        pos += 8;
-    }
-}
-
 public class ObjectPacket
 {
     public int index;

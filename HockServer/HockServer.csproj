@@ -10,6 +10,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="LiteNetLib" Version="1.2.0" />
     <PackageReference Include="Unity3D.UnityEngine" Version="2018.3.5.1" />
   </ItemGroup>
 

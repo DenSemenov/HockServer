@@ -1,11 +1,7 @@
 ﻿using HockServer.Models;
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using UnityEngine;
-using UnityEngine.Windows;
-using UnityEngine.XR;
 
 public class HQMGameWorld2
 {
@@ -118,8 +114,10 @@ public class HQMGameWorld2
     public List<HQMSimulationEvent> SimulateStep()
     {
         var events = new List<HQMSimulationEvent>();
-        var players = new List<(int, HQMSkater)>();
-        var pucks = new List<(int, HQMPuck)>();
+        var players = new (int, HQMSkater)[Objects.Length];
+        var pucks = new (int, HQMPuck)[Objects.Length];
+        int playerCount = 0;
+        int puckCount = 0;
 
         for (int i = 0; i < Objects.Length; i++)
         {
@@ -127,28 +125,27 @@ public class HQMGameWorld2
             switch (obj)
             {
                 case HQMSkater player:
-                    players.Add((i, player));
+                    players[playerCount++] = (i, player);
                     break;
                 case HQMPuck puck:
-                    pucks.Add((i, puck));
+                    pucks[puckCount++] = (i, puck);
                     break;
             }
         }
 
         var collisions = new List<HQMCollision>();
-        for (int i = 0; i < players.Count; i++)
+        for (int i = 0; i < playerCount; i++)
         {
             var item = players[i];
             var skater = UpdatePlayer(item.Item1, item.Item2, PhysicsConfig, Rink, ref collisions);
             players[i] = (item.Item1, skater);
-            i += 1;
         }
 
-        for (int i = 0; i < players.Count; i++)
+        for (int i = 0; i < playerCount; i++)
         {
             var (_, p1) = players[i];
 
-            for (int j = i + 1; j < players.Count; j++)
+            for (int j = i + 1; j < playerCount; j++)
             {
                 var (_, p2) = players[j];
 
@@ -195,16 +192,17 @@ public class HQMGameWorld2
             }
         }
 
-        var pucksOldPos = new List<Vector3>();
-        foreach (var (_, puck) in pucks)
+        var pucksOldPos = new Vector3[puckCount];
+        for (int i = 0; i < puckCount; i++)
         {
-            pucksOldPos.Add(puck.Position);
+            var (_, puck) = pucks[i];
+            pucksOldPos[i] = puck.Position;
             puck.LinearVelocity = new Vector3(puck.LinearVelocity.x, puck.LinearVelocity.y - PhysicsConfig.Gravity, puck.LinearVelocity.z);
         }
 
         UpdateSticksAndPucks(ref players, ref pucks, Rink, ref events, PhysicsConfig);
 
-        for (int i = 0; i < pucks.Count; i++)
+        for (int i = 0; i < puckCount; i++)
         {
             var (puckIndex, puck) = pucks[i];
             var oldPuckPos = pucksOldPos[i];
@@ -225,54 +223,62 @@ public class HQMGameWorld2
 
         ApplyCollisions(ref players, collisions);
 
-
         return events;
     }
 
-    private void UpdateSticksAndPucks(ref List<(int, HQMSkater)> players, ref List<(int, HQMPuck)> pucks, HQMRink rink, ref List<HQMSimulationEvent> events, HQMPhysicsConfiguration PhysicsConfig)
+    private void UpdateSticksAndPucks(ref (int, HQMSkater)[] players, ref (int, HQMPuck)[] pucks, HQMRink rink, ref List<HQMSimulationEvent> events, HQMPhysicsConfiguration PhysicsConfig)
     {
         for (int i = 0; i < 10; i++)
         {
             foreach (var (_, player) in players)
             {
-                player.StickPos += 0.1f * player.StickVelocity;
+                if (player != null)
+                {
+                    player.StickPos += 0.1f * player.StickVelocity;
+                }
             }
             foreach (var (puckIndex, puck) in pucks)
             {
-                puck.Position += 0.1f * puck.LinearVelocity;
+                if (puck != null)
+                {
+                    puck.Position += 0.1f * puck.LinearVelocity;
 
-                var puckLinearVelocityBefore = puck.LinearVelocity;
-                var puckAngularVelocityBefore = puck.AngularVelocity;
-                var puckVertices = puck.GetPuckVertices();
-                if (i == 0)
-                {
-                    DoPuckRinkForces(puck, puckVertices, rink, puckLinearVelocityBefore, puckAngularVelocityBefore, PhysicsConfig.PuckRinkFriction);
-                }
-                foreach (var (playerIndex, player) in players)
-                {
-                    var oldStickVelocity = player.StickVelocity;
-                    if ((puck.Position - player.StickPos).magnitude < 1.0f)
+                    var puckLinearVelocityBefore = puck.LinearVelocity;
+                    var puckAngularVelocityBefore = puck.AngularVelocity;
+                    var puckVertices = puck.GetPuckVertices();
+                    if (i == 0)
                     {
-                        var hasTouched = DoPuckStickForces(puck, player, puckVertices, puckLinearVelocityBefore, puckAngularVelocityBefore, oldStickVelocity);
-                        if (hasTouched)
+                        DoPuckRinkForces(puck, puckVertices, rink, puckLinearVelocityBefore, puckAngularVelocityBefore, PhysicsConfig.PuckRinkFriction);
+                    }
+                    foreach (var (playerIndex, player) in players)
+                    {
+                        if (player != null)
                         {
-                            events.Add(new PuckTouchEvent(new HQMObjectIndex(puckIndex), new HQMObjectIndex(playerIndex)));
+                            var oldStickVelocity = player.StickVelocity;
+                            if ((puck.Position - player.StickPos).magnitude < 1.0f)
+                            {
+                                var hasTouched = DoPuckStickForces(puck, player, puckVertices, puckLinearVelocityBefore, puckAngularVelocityBefore, oldStickVelocity);
+                                if (hasTouched)
+                                {
+                                    events.Add(new PuckTouchEvent(new HQMObjectIndex(puckIndex), new HQMObjectIndex(playerIndex)));
+                                }
+                            }
                         }
                     }
-                }
-                var redNetCollision = DoPuckPostForces(puck, rink.RedNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
-                var blueNetCollision = DoPuckPostForces(puck, rink.BlueNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
+                    var redNetCollision = DoPuckPostForces(puck, rink.RedNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
+                    var blueNetCollision = DoPuckPostForces(puck, rink.BlueNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
 
-                redNetCollision |= DoPuckNetForces(puck, rink.RedNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
-                blueNetCollision |= DoPuckNetForces(puck, rink.BlueNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
+                    redNetCollision |= DoPuckNetForces(puck, rink.RedNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
+                    blueNetCollision |= DoPuckNetForces(puck, rink.BlueNet, puckLinearVelocityBefore, puckAngularVelocityBefore);
 
-                if (redNetCollision)
-                {
-                    events.Add(new PuckTouchedNetEvent(HQMTeam.Red, new HQMObjectIndex(puckIndex)));
-                }
-                if (blueNetCollision)
-                {
-                    events.Add(new PuckTouchedNetEvent(HQMTeam.Blue, new HQMObjectIndex(puckIndex)));
+                    if (redNetCollision)
+                    {
+                        events.Add(new PuckTouchedNetEvent(HQMTeam.Red, new HQMObjectIndex(puckIndex)));
+                    }
+                    if (blueNetCollision)
+                    {
+                        events.Add(new PuckTouchedNetEvent(HQMTeam.Blue, new HQMObjectIndex(puckIndex)));
+                    }
                 }
             }
         }
@@ -358,7 +364,6 @@ public class HQMGameWorld2
                 newRot = RotateMatrixAroundAxis( newRot, rotAxis, player.BodyRot);
             }
 
-
             var intendedCollisionBallPos = player.Position + newRot * collisionBall.Offset;
             var collisionPosDiff = intendedCollisionBallPos - collisionBall.Position;
 
@@ -392,10 +397,6 @@ public class HQMGameWorld2
         {
             player.Height = Mathf.Min(player.Height + 0.125f, 0.75f);
         }
-
-
-
-
 
         feetPos = player.Position - player.Rotation * (player.Height * Vector3.up);
         var touchesIce = false;
@@ -594,9 +595,6 @@ public class HQMGameWorld2
             intendedStickPosition.y = 0.0f;
         }
 
-
-       
-
         var speedAtStickPos = SpeedOfPointIncludingRotation(intendedStickPosition, player.Position, linearVelocityBefore, angularVelocityBefore);
         var stickForce = 0.125f * (intendedStickPosition - player.StickPos) + (speedAtStickPos - player.StickVelocity) * 0.5f;
 
@@ -720,14 +718,17 @@ public class HQMGameWorld2
         return Vector3.Dot(a, normal) * normal;
     }
 
-    private void ApplyCollisions(ref List<(int, HQMSkater)> players, List<HQMCollision> collisions)
+    private void ApplyCollisions(ref (int, HQMSkater)[] players, List<HQMCollision> collisions)
     {
         for (int _ = 0; _ < 16; _++)
         {
             var originalBallVelocities = new List<List<Vector3>>();
             foreach (var (_, skater) in players)
             {
-                originalBallVelocities.Add(skater.CollisionBalls.ConvertAll(x => x.Velocity));
+                if (skater != null)
+                {
+                    originalBallVelocities.Add(skater.CollisionBalls.ConvertAll(x => x.Velocity));
+                }
             }
 
             foreach (var collisionEvent in collisions)
